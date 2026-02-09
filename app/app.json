@@ -1,32 +1,37 @@
 {
   "expo": {
-    "name": "Psych Stage",
-    "slug": "psych-stage",
+    "name": "VIBE",
+    "slug": "vibe-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "scheme": "psychstage",
+    "scheme": "vibe",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#6366F1"
     },
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.psychstage.app"
+      "bundleIdentifier": "com.vibe.mentalhealth",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#6366F1"
       },
-      "package": "com.psychstage.app"
+      "package": "com.vibe.mentalhealth"
     },
-    "web": {
-      "bundler": "metro",
-      "output": "static"
-    },
-    "plugins": ["expo-router", "expo-secure-store"]
+    "plugins": [
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {}
+    }
   }
 }
