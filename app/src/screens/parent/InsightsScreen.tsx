@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Dimensions,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,11 @@ import { db } from '../../config/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { MoodCheckin, MOOD_EMOJIS } from '../../types';
 import { format, subDays, startOfWeek, getDay, getHours } from 'date-fns';
+import ParentAIService, { 
+  ParentInsight, 
+  MoodSummary,
+  analyzeMoodData,
+} from '../../services/ParentAIService';
 
 const { width } = Dimensions.get('window');
 
@@ -47,8 +53,13 @@ export function InsightsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week');
+  
+  // AI-powered state
+  const [moodSummary, setMoodSummary] = useState<MoodSummary | null>(null);
+  const [aiInsights, setAiInsights] = useState<ParentInsight[]>([]);
+  const [loadingInsights, setLoadingInsights] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!user?.familyId) return;
 
     try {
@@ -71,182 +82,85 @@ export function InsightsScreen() {
       })) as MoodCheckin[];
 
       setCheckins(data);
+      
+      // Analyze mood data
+      const summary = ParentAIService.analyzeMoodData(data);
+      setMoodSummary(summary);
+      
+      // Generate AI insights (async)
+      if (data.length >= 3) {
+        setLoadingInsights(true);
+        const teenAge = 15; // TODO: Get from family data
+        ParentAIService.generateAIInsights(data, summary, teenAge)
+          .then(setAiInsights)
+          .catch(err => {
+            console.error('AI insights error:', err);
+            // Fallback to basic pattern detection
+            setAiInsights(detectBasicPatterns(data, summary));
+          })
+          .finally(() => setLoadingInsights(false));
+      }
     } catch (error) {
       console.error('Error fetching insights:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [user?.familyId, selectedPeriod]);
 
   useEffect(() => {
     fetchData();
-  }, [user?.familyId, selectedPeriod]);
+  }, [fetchData]);
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchData();
   };
-
-  // ============================================
-  // PATTERN DETECTION
-  // ============================================
-
-  const detectPatterns = (): Pattern[] => {
-    if (checkins.length < 3) return [];
-
-    const patterns: Pattern[] = [];
-
-    // 1. TIME OF DAY PATTERNS
-    const morningMoods = checkins.filter(c => {
-      const hour = getHours(new Date(c.createdAt));
-      return hour >= 6 && hour < 12;
-    });
-    const eveningMoods = checkins.filter(c => {
-      const hour = getHours(new Date(c.createdAt));
-      return hour >= 18 && hour < 23;
-    });
-
-    const avgMorning = morningMoods.length > 0
-      ? morningMoods.reduce((s, c) => s + c.mood, 0) / morningMoods.length
-      : 0;
-    const avgEvening = eveningMoods.length > 0
-      ? eveningMoods.reduce((s, c) => s + c.mood, 0) / eveningMoods.length
-      : 0;
-
-    if (morningMoods.length > 2 && eveningMoods.length > 2) {
-      if (avgMorning - avgEvening > 0.8) {
-        patterns.push({
-          type: 'time',
-          title: 'Morning Person',
-          description: 'They tend to feel better in the mornings. Evenings might be when stress builds up.',
-          icon: '🌅',
-          color: '#F59E0B',
-          actionable: 'Try connecting in the morning when they\'re in a better headspace.',
-        });
-      } else if (avgEvening - avgMorning > 0.8) {
-        patterns.push({
-          type: 'time',
-          title: 'Night Owl Energy',
-          description: 'They feel better as the day goes on. Mornings might be tough.',
-          icon: '🌙',
-          color: '#8B5CF6',
-          actionable: 'Give them space in the mornings. Connect after school or in the evening.',
-        });
-      }
-    }
-
-    // 2. DAY OF WEEK PATTERNS
-    const dayMoods: number[][] = [[], [], [], [], [], [], []];
-    checkins.forEach(c => {
-      const day = getDay(new Date(c.createdAt));
-      dayMoods[day].push(c.mood);
-    });
-
-    const dayAvgs = dayMoods.map(moods =>
-      moods.length > 0 ? moods.reduce((a, b) => a + b, 0) / moods.length : null
-    );
-
-    const lowestDayIdx = dayAvgs.reduce((min, avg, idx) =>
-      avg !== null && (min === -1 || (dayAvgs[min] !== null && avg < (dayAvgs[min] || 99)))
-        ? idx : min,
-      -1
-    );
-
-    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-    if (lowestDayIdx !== -1 && dayAvgs[lowestDayIdx] !== null && dayAvgs[lowestDayIdx]! < 2.5) {
-      patterns.push({
-        type: 'day',
-        title: `${dayNames[lowestDayIdx]} Blues`,
-        description: `${dayNames[lowestDayIdx]}s tend to be harder for them. Average mood is lower than other days.`,
-        icon: '📅',
-        color: '#3B82F6',
-        actionable: `Plan something positive for ${dayNames[lowestDayIdx]}s — even a small treat or activity.`,
-      });
-    }
-
-    // 3. TREND ANALYSIS
-    const recentAvg = checkins.slice(0, 7).reduce((s, c) => s + c.mood, 0) / Math.min(checkins.length, 7);
-    const olderCheckins = checkins.slice(7, 14);
-    const olderAvg = olderCheckins.length > 0
-      ? olderCheckins.reduce((s, c) => s + c.mood, 0) / olderCheckins.length
-      : recentAvg;
-
-    if (recentAvg - olderAvg > 0.5) {
-      patterns.push({
-        type: 'trend',
+  
+  // Basic pattern detection fallback
+  const detectBasicPatterns = (data: MoodCheckin[], summary: MoodSummary): ParentInsight[] => {
+    const insights: ParentInsight[] = [];
+    
+    if (summary.trend === 'improving') {
+      insights.push({
+        type: 'celebration',
+        priority: 'low',
         title: 'Improving! 📈',
         description: 'Mood has been trending up compared to last week. Something is going right!',
-        icon: '✨',
-        color: '#10B981',
         actionable: 'Ask what\'s been going well! Celebrate the positive.',
+        emoji: '✨',
+        color: '#10B981',
       });
-    } else if (olderAvg - recentAvg > 0.5) {
-      patterns.push({
-        type: 'trend',
+    } else if (summary.trend === 'declining') {
+      insights.push({
+        type: 'alert',
+        priority: 'medium',
         title: 'Worth Watching',
         description: 'Mood has dipped compared to last week. Might be temporary, but worth a gentle check-in.',
-        icon: '📉',
-        color: '#F59E0B',
         actionable: 'Create a low-pressure opportunity to talk. "How are things going for you lately?"',
+        emoji: '📉',
+        color: '#F59E0B',
       });
     }
-
-    // 4. CHECK-IN STREAKS
-    const today = new Date();
-    let streak = 0;
-    for (let i = 0; i < 30; i++) {
-      const checkDay = subDays(today, i);
-      const hasCheckin = checkins.some(c =>
-        format(new Date(c.createdAt), 'yyyy-MM-dd') === format(checkDay, 'yyyy-MM-dd')
-      );
-      if (hasCheckin) streak++;
-      else break;
-    }
-
-    if (streak >= 7) {
-      patterns.push({
-        type: 'streak',
-        title: `${streak} Day Streak! 🔥`,
+    
+    if (summary.checkInStreak >= 7) {
+      insights.push({
+        type: 'celebration',
+        priority: 'low',
+        title: `${summary.checkInStreak} Day Streak! 🔥`,
         description: 'They\'ve been checking in consistently. This shows engagement and self-awareness.',
-        icon: '🎯',
+        emoji: '🎯',
         color: '#10B981',
       });
-    } else if (streak === 0 && checkins.length > 0) {
-      const lastCheckin = checkins[0];
-      const daysSince = Math.floor((today.getTime() - new Date(lastCheckin.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-      if (daysSince >= 3) {
-        patterns.push({
-          type: 'concern',
-          title: 'Radio Silence',
-          description: `No check-in in ${daysSince} days. This could be nothing, or they might be going through something.`,
-          icon: '📵',
-          color: '#EF4444',
-          actionable: 'Reach out casually. "Hey, just thinking of you. How\'s your week been?"',
-        });
-      }
     }
-
-    // 5. LOW MOOD FREQUENCY
-    const lowMoodCount = checkins.filter(c => c.mood <= 2).length;
-    const lowMoodPercent = (lowMoodCount / checkins.length) * 100;
-
-    if (lowMoodPercent > 40 && checkins.length >= 5) {
-      patterns.push({
-        type: 'concern',
-        title: 'Frequent Low Moods',
-        description: `${Math.round(lowMoodPercent)}% of check-ins show low mood. This pattern deserves attention.`,
-        icon: '💙',
-        color: '#6366F1',
-        actionable: 'Consider a deeper conversation or consulting a professional. See the Resources section.',
-      });
-    }
-
-    return patterns;
+    
+    return insights;
   };
 
-  const patterns = detectPatterns();
+  // Pattern detection now handled by ParentAIService
+
+  // Use AI insights instead of basic pattern detection
+  const patterns = aiInsights;
 
   // ============================================
   // MOOD BY TIME OF DAY
@@ -354,15 +268,30 @@ export function InsightsScreen() {
           </View>
         ) : (
           <>
-            {/* Patterns */}
-            {patterns.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>🔍 Patterns Detected</Text>
-                {patterns.map((pattern, i) => (
+            {/* AI-Powered Insights */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>🔍 Insights</Text>
+                {loadingInsights && (
+                  <ActivityIndicator size="small" color="#6366F1" />
+                )}
+              </View>
+              
+              {patterns.length > 0 ? (
+                patterns.map((pattern, i) => (
                   <View key={i} style={[styles.patternCard, { borderLeftColor: pattern.color }]}>
                     <View style={styles.patternHeader}>
-                      <Text style={styles.patternIcon}>{pattern.icon}</Text>
-                      <Text style={[styles.patternTitle, { color: pattern.color }]}>{pattern.title}</Text>
+                      <Text style={styles.patternIcon}>{pattern.emoji}</Text>
+                      <View style={styles.patternTitleRow}>
+                        <Text style={[styles.patternTitle, { color: pattern.color }]}>{pattern.title}</Text>
+                        {pattern.priority === 'high' || pattern.priority === 'urgent' ? (
+                          <View style={[styles.priorityBadge, { backgroundColor: pattern.color + '20' }]}>
+                            <Text style={[styles.priorityText, { color: pattern.color }]}>
+                              {pattern.priority === 'urgent' ? '❗ Urgent' : '⚡ Important'}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
                     <Text style={styles.patternDesc}>{pattern.description}</Text>
                     {pattern.actionable && (
@@ -372,9 +301,16 @@ export function InsightsScreen() {
                       </View>
                     )}
                   </View>
-                ))}
-              </View>
-            )}
+                ))
+              ) : !loadingInsights ? (
+                <View style={styles.noInsights}>
+                  <Text style={styles.noInsightsEmoji}>🔮</Text>
+                  <Text style={styles.noInsightsText}>
+                    More check-ins needed to detect patterns
+                  </Text>
+                </View>
+              ) : null}
+            </View>
 
             {/* Mood by Time of Day */}
             <View style={styles.section}>
@@ -575,11 +511,16 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 24,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#1F2937',
-    marginBottom: 12,
   },
   card: {
     backgroundColor: '#FFF',
@@ -605,16 +546,47 @@ const styles = StyleSheet.create({
   },
   patternHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 8,
   },
   patternIcon: {
     fontSize: 20,
     marginRight: 8,
+    marginTop: 2,
+  },
+  patternTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   patternTitle: {
     fontSize: 16,
     fontWeight: '700',
+  },
+  priorityBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  priorityText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  noInsights: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+  },
+  noInsightsEmoji: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  noInsightsText: {
+    fontSize: 14,
+    color: '#6B7280',
   },
   patternDesc: {
     fontSize: 14,
