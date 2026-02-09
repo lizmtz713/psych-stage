@@ -10,9 +10,16 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "autoIncrement": true
+    }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "lizmtz713@gmail.com",
+        "appleTeamId": "R77U48L9QW"
+      }
+    }
   }
 }
