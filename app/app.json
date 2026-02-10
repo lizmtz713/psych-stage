@@ -12,7 +12,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#6366F1"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vibe.mentalhealth",
@@ -28,7 +30,8 @@
       "package": "com.vibe.mentalhealth"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font"
     ],
     "extra": {
       "eas": {}
