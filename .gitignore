@@ -1,0 +1,3 @@
+# Local Expo state should never be committed
+.expo/
+app/.expo/
